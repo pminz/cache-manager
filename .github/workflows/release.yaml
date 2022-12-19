@@ -1,0 +1,68 @@
+name: Gingersnap db-syncer - Build and publish
+
+on:
+ workflow_dispatch:
+   inputs:
+     ref:
+       description: "The db-syncer branch/tag to checkout when creating the image."
+       required: true
+       default: "test_pipeline"
+
+#on:
+#  push:
+#    branches:
+#      - 'release_pipeline'
+      
+env:
+  GITHUB_TOKEN: ${{ secrets.MY_TOKEN }}   
+  release-version: 0.0.0
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure Git
+        run: |
+          git config --global user.name "pminz"
+          git config --global user.email "pminz@redhat.com"
+          
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Tag the release
+        run: |
+          ls -la
+          tree
+          git tag -a v${{ env.release-version}} -m "Release cache-manager:: ${{ env.release-version}}"
+          git push origin --tags
+        
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Quay
+        uses: docker/login-action@v2
+        with:
+          registry: quay.io
+          username: ${{ secrets.PRIVATE_QUAY_USERNAME }}
+          password: ${{ secrets.PRIVATE_QUAY_TOKEN }}
+
+      - name: Print user name and password
+        run: |
+            print (${{ secrets.PRIVATE_QUAY_USERNAME }})
+            print (${{ secrets.PRIVATE_QUAY_TOKEN }})
+      - name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          file: 
+          push: true
+          tags: quay.io/pminz/cache-manager:${{ env.release-version }}
+          build-args: |
+            DB_SYNCER_VERSION=${{ env.release-version }}
