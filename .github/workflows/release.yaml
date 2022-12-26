@@ -1,46 +1,35 @@
-name: Gingersnap db-syncer - Build and publish
+name: Gingersnap cache-manager - Build and publish
 
-on:
- workflow_dispatch:
-   inputs:
-     ref:
-       description: "The db-syncer branch/tag to checkout when creating the image."
-       required: true
-       default: "test_pipeline"
-
-#on:
-#  push:
-#    branches:
-#      - 'release_pipeline'
+on: 
+  push:
+    tags:
+      - 'v*'
       
 env:
-  GITHUB_TOKEN: ${{ secrets.MY_TOKEN }}   
-  release-version: 0.0.0
+  GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}    
 
 jobs:
   release:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Configure Git
-        run: |
-          git config --global user.name "pminz"
-          git config --global user.email "pminz@redhat.com"
-          
       - name: Checkout
         uses: actions/checkout@v2
-        with:
-          ref: ${{ github.event.inputs.ref }}
 
-      - name: Tag the release
-        run: |
-          ls -la
-          tree
-          git tag -a v${{ env.release-version}} -m "Release cache-manager:: ${{ env.release-version}}"
-          git push origin --tags
-        
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+      - name: Get latest tag
+        id: vars
+        run: | 
+          LATEST_TAG=$(git describe --tags `git rev-list --tags --max-count=1`)
+          echo LATEST_TAG=$LATEST_TAG >> $GITHUB_OUTPUT
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build
+        run: mvn package -DskipTests
 
       - name: Set up Docker Buildx
         id: buildx
@@ -53,16 +42,13 @@ jobs:
           username: ${{ secrets.PRIVATE_QUAY_USERNAME }}
           password: ${{ secrets.PRIVATE_QUAY_TOKEN }}
 
-      - name: Print user name and password
-        run: |
-            print (${{ secrets.PRIVATE_QUAY_USERNAME }})
-            print (${{ secrets.PRIVATE_QUAY_TOKEN }})
+
       - name: Build and push
         uses: docker/build-push-action@v3
         with:
           context: .
-          file: 
+          file: src/main/docker/Dockerfile.jvm
           push: true
-          tags: quay.io/pminz/cache-manager:${{ env.release-version }}
+          tags: quay.io/pminz/cache-manager:${{ steps.vars.outputs.LATEST_TAG }}
           build-args: |
-            DB_SYNCER_VERSION=${{ env.release-version }}
+            cache_manager_VERSION=${{ steps.vars.outputs.LATEST_TAG }}
