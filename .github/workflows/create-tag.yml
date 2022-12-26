@@ -30,7 +30,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
         with: 
-          ref: ${{ github.event.inputs.ref }}
           token: ${{ secrets.MY_TOKEN }}   
           
       - name: Tag the release
