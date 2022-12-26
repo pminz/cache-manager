@@ -1,12 +1,17 @@
 name: cache-manager -Create Tag
 
+#on:
+#  workflow_dispatch:
+#    inputs:
+#      ref:
+#        description: "The branch to checkout when creating the image."
+#        required: true
+#        default: "release_pipeline"
+
 on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: "The branch to checkout when creating the image."
-        required: true
-        default: "release_pipeline"
+  push:
+    branches:
+      - 'release_pipeline'
       
 env:
   GITHUB_TOKEN: ${{ secrets.MY_TOKEN }}   
