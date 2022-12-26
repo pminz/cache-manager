@@ -29,7 +29,7 @@ jobs:
           java-version: '17'
 
       - name: Build
-        run: ./mvnw package
+        run: mvn package -DskipTests
 
       - name: Set up Docker Buildx
         id: buildx
