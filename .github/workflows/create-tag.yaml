@@ -6,7 +6,7 @@ on:
 
 env:
   GITHUB_TOKEN: ${{ secrets.MY_TOKEN }}   
-  release-version: ${{ github.event.inputs.ref }}
+  release-version: ${{ github.event.client_payload.ref }}
 
 jobs:
   tag:
