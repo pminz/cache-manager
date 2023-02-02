@@ -2,11 +2,13 @@ package io.gingersnapproject.search;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
+import org.apache.commons.lang3.StringUtils;
 import org.infinispan.commons.dataconversion.internal.Json;
 import org.junit.jupiter.api.Test;
 
@@ -39,11 +41,14 @@ public class CachesAndQueryTest {
 
       Thread.sleep(2000);
 
-      List<String> results = queryHandler.query("select * from " + INDEX_NAME + " order by name")
-            .subscribe().asStream().collect(Collectors.toList());
+      QueryResult result = queryHandler.query("select * from " + INDEX_NAME + " order by name")
+            .await().indefinitely();
+      assertThat(result.hitCount()).isEqualTo(2L);
+      assertThat(result.hitCountExact()).isTrue();
+      assertThat(result.hitsExacts()).isTrue();
 
-      assertThat(results.size()).isEqualTo(2L);
-      assertThat(results).containsExactly(originalJohn.toString(), originalMike.toString());
+      List<String> hits = result.hits().subscribe().asStream().collect(Collectors.toList());
+      assertThat(hits).containsExactly(originalJohn.toString(), originalMike.toString());
 
       caches.remove(INDEX_NAME, "john").await().indefinitely();
 
@@ -51,10 +56,33 @@ public class CachesAndQueryTest {
 
       Thread.sleep(2000);
 
-      results = queryHandler.query("select * from " + INDEX_NAME + " order by name")
-            .subscribe().asStream().collect(Collectors.toList());
+      result = queryHandler.query("select * from " + INDEX_NAME + " order by name")
+            .await().indefinitely();
+      assertThat(result.hitCount()).isEqualTo(1L);
+      assertThat(result.hitCountExact()).isTrue();
+      assertThat(result.hitsExacts()).isTrue();
 
-      assertThat(results.size()).isEqualTo(1L);
-      assertThat(results).containsExactly(originalMike.toString());
+      hits = result.hits().subscribe().asStream().collect(Collectors.toList());
+      assertThat(hits).containsExactly(originalMike.toString());
+
+      HashMap<String, String> values = new HashMap<>();
+      for (int i = 0; i < 100; i++) {
+         String key = StringUtils.leftPad(i + "", 3, "0");
+         String surname = StringUtils.leftPad(i / 10 + "", 2, "0");
+         String name = StringUtils.leftPad(i % 10 + "", 2, "0");
+
+         values.put(key, Json.object("surname", surname, "name", name, "nick", key).toString());
+      }
+
+      caches.putAll(INDEX_NAME, values).await().indefinitely();
+
+      result = queryHandler.query("select * from " + INDEX_NAME + " where surname = '07' order by name")
+            .await().indefinitely();
+      assertThat(result.hitCount()).isEqualTo(10L);
+      assertThat(result.hitCountExact()).isTrue();
+      assertThat(result.hitsExacts()).isTrue();
+
+      hits = result.hits().subscribe().asStream().collect(Collectors.toList());
+      assertThat(hits.get(3)).isEqualTo("{\"surname\":\"07\",\"name\":\"03\",\"nick\":\"073\"}");
    }
 }

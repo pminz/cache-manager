@@ -1,5 +1,6 @@
 package io.gingersnapproject.search.opensearch;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -24,7 +25,6 @@ public class OpenSearchBackend implements SearchBackend {
 
    Set<String> mappedRules = ConcurrentHashMap.newKeySet();
 
-   @Override
    public Uni<String> mapping(String indexName) {
       Request request = new Request("PUT", "/" + indexName);
 
@@ -52,6 +52,32 @@ public class OpenSearchBackend implements SearchBackend {
             .transformToUni(___ -> {
                Request request = new Request("PUT", "/" + indexName + "/_doc/" + documentId);
                request.setJsonEntity(jsonString);
+
+               return commandSubmit(request);
+            });
+   }
+
+   @Override
+   public Uni<String> putAll(String indexName, Map<String, String> documents) {
+      if (documents.isEmpty()) {
+         return Uni.createFrom().nullItem();
+      }
+
+      Uni<?> mappingUni = ensureMapping(indexName);
+      return mappingUni.onItem()
+            .transformToUni(___ -> {
+               Request request = new Request("POST", "/_bulk");
+
+               request.addParameter("refresh", "wait_for");
+
+               StringBuilder body = new StringBuilder();
+               for (Map.Entry<String, String> entry : documents.entrySet()) {
+                  body.append(Json.object("index", Json.object("_index", indexName, "_id", entry.getKey())));
+                  body.append("\n"); // using \n and not the system line separator, since the value will be used by the server VM
+                  body.append(entry.getValue().replace("\n", "")); // make the single entity single line
+                  body.append("\n"); // using \n and not the system line separator, since the value will be used by the server VM
+               }
+               request.setJsonEntity(body.toString());
 
                return commandSubmit(request);
             });

@@ -5,15 +5,20 @@ import static java.lang.String.format;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 
 import org.infinispan.commons.dataconversion.MediaType;
 import org.infinispan.commons.logging.LogFactory;
+import org.infinispan.commons.marshall.WrappedByteArray;
 import org.infinispan.commons.util.Util;
 import org.infinispan.server.hotrod.HotRodOperation;
 import org.infinispan.server.hotrod.OperationStatus;
@@ -21,16 +26,27 @@ import org.infinispan.server.hotrod.ProtocolFlag;
 import org.infinispan.server.hotrod.logging.Log;
 import org.infinispan.util.concurrent.TimeoutException;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-
 import io.gingersnapproject.Caches;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.smallrye.mutiny.Uni;
 
-public record CommandProcessor(Channel channel, Caches maps) {
+public class CommandProcessor {
    private static final Log log = LogFactory.getLog(CommandProcessor.class, Log.class);
+   private static final String INTERNAL_MAP_PREFIX = "___";
+   private static final String OFFSET_MAP_NAME = INTERNAL_MAP_PREFIX + "debezium-offset";
+   private static final String SCHEMA_MULTI_MAP_NAME = INTERNAL_MAP_PREFIX + "debezium-schema";
+
+   private final Channel channel;
+   private final Caches maps;
+
+   private final ConcurrentMap<WrappedByteArray, WrappedByteArray> debeziumOffsetMap = new ConcurrentHashMap<>();
+   private final ConcurrentMap<WrappedByteArray, List<byte[]>> debeziumSchemaMultiMap = new ConcurrentHashMap<>();
+
+   public CommandProcessor(Channel channel, Caches maps) {
+      this.channel = channel;
+      this.maps = maps;
+   }
 
    private static String toString(byte[] bytes) {
       return new String(bytes, StandardCharsets.UTF_8);
@@ -40,10 +56,6 @@ public record CommandProcessor(Channel channel, Caches maps) {
       return str == null ? null : str.getBytes(StandardCharsets.UTF_8);
    }
 
-   private Cache<String, List<byte[]>> getOrCreateMultimap(String name) {
-      return maps.getMultiMaps().computeIfAbsent(name, ___ -> Caffeine.newBuilder().build());
-   }
-
    public void put(GingersnapHeader header, byte[] key, byte[] value) {
       if (header.hasFlag(ProtocolFlag.ForceReturnPreviousValue)) {
          writeException(header, new UnsupportedOperationException("previous value is not supported!"));
@@ -51,7 +63,17 @@ public record CommandProcessor(Channel channel, Caches maps) {
       }
 
       try {
-         Uni<String> putUni = maps.put(header.getCacheName(), toString(key), toString(value));
+         String cacheName = header.getCacheName();
+         if (cacheName.startsWith("___")) {
+            if (!OFFSET_MAP_NAME.equals(cacheName)) {
+               writeException(header, new IllegalArgumentException("Cache of name " + cacheName + " not supported in Gingersnap."));
+               return;
+            }
+            debeziumOffsetMap.put(new WrappedByteArray(key), new WrappedByteArray(value));
+            writeSuccess(header);
+            return;
+         }
+         Uni<String> putUni = maps.denormalizedPut(header.getCacheName(), toString(key), toString(value));
          putUni.subscribe().with(___ -> writeSuccess(header), t -> writeException(header, t));
       } catch (Throwable t) {
          writeException(header, t);
@@ -68,6 +90,17 @@ public record CommandProcessor(Channel channel, Caches maps) {
 
    public void get(GingersnapHeader header, byte[] key) {
       try {
+         String cacheName = header.getCacheName();
+         if (cacheName.startsWith(INTERNAL_MAP_PREFIX)) {
+            if (!OFFSET_MAP_NAME.equals(cacheName)) {
+               writeException(header, new IllegalArgumentException("Cache of name " + cacheName + " not supported in Gingersnap."));
+               return;
+            }
+            WrappedByteArray value = debeziumOffsetMap.get(new WrappedByteArray(key));
+            handleGetResponse(header, value.getBytes());
+            return;
+         }
+
          // This can never be null
          Uni<String> uniValue = maps.get(header.getCacheName(), toString(key));
          uniValue.subscribe().with(s -> handleGetResponse(header, toByteArray(s)),
@@ -84,12 +117,26 @@ public record CommandProcessor(Channel channel, Caches maps) {
       }
 
       try {
+         String cacheName = header.getCacheName();
+         if (cacheName.startsWith(INTERNAL_MAP_PREFIX)) {
+            if (!OFFSET_MAP_NAME.equals(cacheName)) {
+               writeException(header, new IllegalArgumentException("Cache of name " + cacheName + " not supported in Gingersnap."));
+               return;
+            }
+            if (debeziumOffsetMap.remove(new WrappedByteArray(key)) != null) {
+               writeSuccess(header);
+            } else {
+               writeNotExist(header);
+            }
+            return;
+         }
+
          Uni<Boolean> removeUni = maps.remove(header.getCacheName(), toString(key));
          removeUni.subscribe().with(removed -> {
             if (removed) {
-               this.writeSuccess(header);
+               writeSuccess(header);
             } else {
-               this.writeNotExist(header);
+               writeNotExist(header);
             }
          }, t -> writeException(header, t));
       } catch (Throwable t) {
@@ -105,10 +152,62 @@ public record CommandProcessor(Channel channel, Caches maps) {
 
       try {
          String cacheName = header.getCacheName();
-         for (Map.Entry<byte[], byte[]> entry : entryMap.entrySet()) {
-            maps.put(cacheName, toString(entry.getKey()), toString(entry.getValue()));
+         if (cacheName.startsWith(INTERNAL_MAP_PREFIX)) {
+            if (!OFFSET_MAP_NAME.equals(cacheName)) {
+               writeException(header, new IllegalArgumentException("Cache of name " + cacheName + " not supported in Gingersnap."));
+               return;
+            }
+            for (Map.Entry<byte[], byte[]> entry : entryMap.entrySet()) {
+               debeziumOffsetMap.put(new WrappedByteArray(entry.getKey()), new WrappedByteArray(entry.getValue()));
+            }
+            writeSuccess(header);
+            return;
          }
-         writeSuccess(header);
+         Map<String, String> transformed = new HashMap<>();
+         for (Map.Entry<byte[], byte[]> entry : entryMap.entrySet()) {
+            transformed.put(toString(entry.getKey()), toString(entry.getValue()));
+         }
+
+         maps.putAll(cacheName, transformed).subscribe()
+               .with(ignore -> writeSuccess(header), t -> writeException(header, t));
+      } catch (Throwable t) {
+         writeException(header, t);
+      }
+   }
+
+   public void getAll(GingersnapHeader header, Set<byte[]> keys) {
+      try {
+         String cacheName = header.getCacheName();
+         if (cacheName.startsWith(INTERNAL_MAP_PREFIX)) {
+            if (!OFFSET_MAP_NAME.equals(cacheName)) {
+               writeException(header, new IllegalArgumentException("Cache of name " + cacheName + " not supported in Gingersnap."));
+               return;
+            }
+
+            Map<byte[], byte[]> response = new HashMap<>();
+            for (byte[] key : keys) {
+               WrappedByteArray value = debeziumOffsetMap.get(new WrappedByteArray(key));
+               if (value != null) {
+                  response.put(key, value.getBytes());
+               }
+            }
+            writeResponse(header.encoder().getAllResponse(header, null, channel, response));
+            return;
+         }
+
+         Set<String> keysTransformed = new HashSet<>();
+         for (byte[] key : keys) {
+            keysTransformed.add(toString(key));
+         }
+
+         maps.getAll(cacheName, keysTransformed).subscribe()
+                 .with(s -> {
+                    Map<byte[], byte[]> transformed = new HashMap<>();
+                    for (Map.Entry<String, String> entry : s.entrySet()) {
+                       transformed.put(toByteArray(entry.getKey()), toByteArray(entry.getValue()));
+                    }
+                    writeResponse(header.encoder().getAllResponse(header, null, channel, transformed));
+                 }, t -> writeException(header, t));
       } catch (Throwable t) {
          writeException(header, t);
       }
@@ -221,9 +320,11 @@ public record CommandProcessor(Channel channel, Caches maps) {
    }
 
    public void getMultiMap(GingersnapHeader header, byte[] key) {
-      Cache<String, List<byte[]>> map = getOrCreateMultimap(header.getCacheName());
+      if (!SCHEMA_MULTI_MAP_NAME.equals(header.getCacheName())) {
+         writeException(header, new IllegalArgumentException("Multimap of name " + header.getCacheName() + " not supported in Gingersnap."));
+      }
       try {
-         List<byte[]> list = map.getIfPresent(new String(key));
+         List<byte[]> list = debeziumSchemaMultiMap.get(new WrappedByteArray(key));
          if (list == null) {
             writeNotExist(header);
          } else {
@@ -235,9 +336,11 @@ public record CommandProcessor(Channel channel, Caches maps) {
    }
 
    public void putMultiMap(GingersnapHeader header, byte[] key, byte[] value) {
-      Cache<String, List<byte[]>> map = getOrCreateMultimap(header.getCacheName());
+      if (!SCHEMA_MULTI_MAP_NAME.equals(header.getCacheName())) {
+         writeException(header, new IllegalArgumentException("Multimap of name " + header.getCacheName() + " not supported in Gingersnap."));
+      }
       try {
-         map.asMap().compute(new String(key), (k, v) -> {
+         debeziumSchemaMultiMap.compute(new WrappedByteArray(key), (k, v) -> {
             if (v == null) {
                var list = new ArrayList<byte[]>();
                list.add(value);

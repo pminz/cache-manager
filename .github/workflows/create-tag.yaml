@@ -1,0 +1,29 @@
+name: cache-manager -Create Tag
+
+on:
+ repository_dispatch:
+    types: [test-event]
+
+env:
+  GITHUB_TOKEN: ${{ secrets.MY_TOKEN }}   
+  release-version: ${{ github.event.inputs.ref }}
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure Git
+        run: |
+          git config --global user.name "pminz"
+          git config --global user.email "pminz@redhat.com"
+
+      - name: Checkout
+        uses: actions/checkout@v2
+        with: 
+          ref: ${{ env.release-version }}
+          
+      - name: Tag the release
+        run: |
+         git tag -a v${{ env.release-version}} -m "Release cache-manager:: ${{ env.release-version}}"
+         git push origin --tags
