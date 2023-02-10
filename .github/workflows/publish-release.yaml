@@ -1,4 +1,5 @@
-name: cache-manager -Create Tag
+name: Gingersnap cache-manager - Create tag and Publish
+
 
 on:
  workflow_call:
@@ -35,6 +36,7 @@ jobs:
          git push origin --tags
 
   publish:
+      needs: tag
       uses: ./.github/workflows/publish-images.yaml
       secrets: inherit
       with:
