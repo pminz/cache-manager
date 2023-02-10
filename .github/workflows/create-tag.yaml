@@ -1,16 +1,17 @@
 name: cache-manager -Create Tag
 
 on:
- workflow_dispatch:
-   inputs:
-     ref:
-       description: "The branch to checkout when creating the image."
-       required: true
-       default: "release_pipeline"
+ workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: main
+      repo: 
+        type: string
+        default: gingersnap-project/cache-manager
 
 env:
   GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}   
-  release-version: ${{ github.event.inputs.ref }}
 
 jobs:
   tag:
@@ -25,9 +26,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with: 
-          ref: ${{ github.event.inputs.ref }}
+          ref: ${{ inputs.ref }} 
+          repository: ${{ inputs.repo }}
           
       - name: Tag the release
         run: |
-         git tag -a v${{ env.release-version}} -m "Release cache-manager:: ${{ env.release-version}}"
+         git tag -a v${{ inputs.ref }} -m "Release cache-manager:: ${{ inputs.ref }}"
          git push origin --tags
+
+  publish:
+      uses: ./.github/workflows/publish-images.yaml
+      secrets: inherit
+      with:
+        tag: ${{ inputs.ref }}
