@@ -10,6 +10,9 @@ on:
       repo: 
         type: string
         default: gingersnap-project/cache-manager
+      tag:
+        type: string
+        default: latest
 
 env:
   GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}   
@@ -32,7 +35,7 @@ jobs:
           
       - name: Tag the release
         run: |
-         git tag -a v${{ inputs.ref }} -m "Release cache-manager:: ${{ inputs.ref }}"
+         git tag -a v${{ inputs.tag }} -m "Release cache-manager:: ${{ inputs.tag }}"
          git push origin --tags
 
   publish:
@@ -40,4 +43,4 @@ jobs:
       uses: ./.github/workflows/publish-images.yaml
       secrets: inherit
       with:
-        tag: ${{ inputs.ref }}
+        tag: ${{ inputs.tag }}
