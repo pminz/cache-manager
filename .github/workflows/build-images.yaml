@@ -5,10 +5,10 @@ on:
     inputs:
       ref:
         type: string
-        default: ${{ github.ref }}
-      repository:
+        default: main
+      repository: 
         type: string
-        default: ${{ github.repository }}
+        default: gingersnap-project/cache-manager
       tag:
         type: string
         default: latest
