@@ -6,9 +6,9 @@ on:
       ref:
         type: string
         default: ${{ github.ref }}
-      repository: 
+      repository:
         type: string
-        default: ${{ github.repository }
+        default: ${{ github.repository }}
       tag:
         type: string
         default: latest
